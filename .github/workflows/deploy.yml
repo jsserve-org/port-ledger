@@ -1,0 +1,101 @@
+name: Build and Deploy
+
+on:
+  push:
+    branches: [main, master]
+  workflow_dispatch:
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ghcr.io/jsserve-org/port-ledger
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.IMAGE_NAME }}
+          tags: |
+            type=sha,prefix=,suffix=,format=short
+            type=raw,value=latest,enable={{is_default_branch}}
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  deploy:
+    runs-on: ubuntu-latest
+    needs: build-and-push
+    environment: production
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup SSH
+        uses: webfactory/ssh-agent@v0.9.0
+        with:
+          ssh-private-key: ${{ secrets.SERVER_SSH_KEY }}
+          log-public-key: false
+
+      - name: Deploy to server
+        env:
+          SERVER_HOST: ${{ secrets.SERVER_HOST }}
+          SERVER_USER: ${{ secrets.SERVER_USER }}
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GHCR_USER: ${{ github.actor }}
+        run: |
+          set -e
+          echo "Adding server to known hosts..."
+          mkdir -p ~/.ssh
+          ssh-keyscan -H "$SERVER_HOST" >> ~/.ssh/known_hosts 2>/dev/null || true
+
+          echo "Creating remote directory..."
+          ssh "$SERVER_USER@$SERVER_HOST" "mkdir -p ~/port-ledger"
+
+          echo "Copying compose file..."
+          scp docker-compose.prod.yml "$SERVER_USER@$SERVER_HOST:~/port-ledger/docker-compose.yml"
+
+          echo "Logging in to GHCR on server..."
+          ssh "$SERVER_USER@$SERVER_HOST" "echo '$GHCR_TOKEN' | sudo docker login ghcr.io -u '$GHCR_USER' --password-stdin"
+
+          echo "Pulling latest image on server..."
+          ssh "$SERVER_USER@$SERVER_HOST" "cd ~/port-ledger && sudo docker compose pull"
+
+          echo "Stopping old container..."
+          ssh "$SERVER_USER@$SERVER_HOST" "cd ~/port-ledger && sudo docker compose down 2>/dev/null || true"
+
+          echo "Starting new container..."
+          ssh "$SERVER_USER@$SERVER_HOST" "cd ~/port-ledger && sudo docker compose up -d"
+
+          echo "Cleaning up..."
+          ssh "$SERVER_USER@$SERVER_HOST" "sudo docker image prune -f && sudo docker logout ghcr.io"
+
+          echo "Deployment complete!"
+          ssh "$SERVER_USER@$SERVER_HOST" "sudo docker ps --filter name=port-ledger --format 'table {{.Names}}\t{{.Status}}\t{{.Ports}}'"

@@ -1,0 +1,17 @@
+services:
+  port-ledger:
+    image: ghcr.io/jsserve-org/port-ledger:latest
+    container_name: port-ledger
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      NODE_ENV: production
+      PORT: "3000"
+      SCAN_PASSWORD: "${SCAN_PASSWORD:-admin123}"
+      AUTH_SECRET: "${AUTH_SECRET:-change-this-secret-before-public-use}"
+    volumes:
+      - port-ledger-data:/app/data
+
+volumes:
+  port-ledger-data:
