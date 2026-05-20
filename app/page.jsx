@@ -25,25 +25,38 @@ async function requestJson(url, options = {}) {
 function StatusPill({ status }) {
   return (
     <div className={`status-pill ${status.mode}`}>
-      <span />
+      <span className="dot" />
       <strong>{status.text}</strong>
     </div>
   );
 }
 
-function PortRow({ scanId, item, onProtect, onUnlock }) {
+function PortRow({ scanId, item, onProtect, onUnlock, index }) {
   const isProtected = item.protected;
 
   return (
-    <article className={`port-row ${isProtected ? "locked" : ""}`}>
-      <div className="port-number">{isProtected ? "..." : item.port}</div>
+    <article
+      className={`port-row ${isProtected ? "locked" : "open"}`}
+      style={{ animationDelay: `${index * 40}ms` }}
+    >
+      <div className="port-number">{isProtected ? "···" : item.port}</div>
       <div className="port-main">
         <strong>{isProtected ? "Protected port" : item.service}</strong>
-        <span>
-          {isProtected
-            ? "Server redacted this row until the password is verified"
-            : `Open TCP port - ${item.latencyMs} ms response`}
-        </span>
+        <div className="port-meta">
+          {!isProtected && (
+            <>
+              <span>{item.latencyMs} ms</span>
+              {item.title && (
+                <span className="port-title" title={item.title}>
+                  {item.title}
+                </span>
+              )}
+            </>
+          )}
+          {isProtected && (
+            <span>Server redacted — verify password to display</span>
+          )}
+        </div>
       </div>
       <button
         className={`row-switch ${isProtected ? "off" : "on"}`}
@@ -81,10 +94,15 @@ export default function Page() {
   const [isScanning, setIsScanning] = useState(false);
   const [unlockOpen, setUnlockOpen] = useState(false);
   const [password, setPassword] = useState("");
+  const [scanMeta, setScanMeta] = useState("");
 
   const currentOpenCount = useMemo(() => {
     return currentScan?.open?.filter((item) => !item.protected).length || 0;
   }, [currentScan]);
+
+  const isFullScan = useMemo(() => {
+    return !ports.trim();
+  }, [ports]);
 
   async function loadHistory() {
     const payload = await requestJson("/api/history");
@@ -100,6 +118,7 @@ export default function Page() {
     event.preventDefault();
     setIsScanning(true);
     setStatus({ text: "Scanning", mode: "busy" });
+    setScanMeta(isFullScan ? "Scanning all 65,535 TCP ports — this may take 4–8 minutes" : "Scanning selected ports");
 
     try {
       const payload = await requestJson("/api/scan", {
@@ -113,6 +132,7 @@ export default function Page() {
       setStatus({ text: error.message, mode: "error" });
     } finally {
       setIsScanning(false);
+      setScanMeta("");
     }
   }
 
@@ -151,9 +171,9 @@ export default function Page() {
   return (
     <main className="shell">
       <section className="hero">
-        <div>
-          <p className="eyebrow">TCP exposure monitor</p>
-          <h1>Port Ledger</h1>
+        <div className="hero-title-group">
+          <p className="eyebrow">Network Exposure Monitor</p>
+          <h1>PORT LEDGER</h1>
         </div>
         <StatusPill status={status} />
       </section>
@@ -161,87 +181,111 @@ export default function Page() {
       <section className="scan-panel" aria-label="Scan controls">
         <form className="scan-form" onSubmit={submitScan}>
           <label>
-            <span>IP or hostname</span>
+            <span>Target host</span>
             <input
               value={target}
               onChange={(event) => setTarget(event.target.value)}
-              placeholder="127.0.0.1"
+              placeholder="192.168.1.1"
               required
               autoComplete="off"
             />
           </label>
           <label>
-            <span>Ports</span>
+            <span>Port range</span>
             <input
               value={ports}
               onChange={(event) => setPorts(event.target.value)}
-              placeholder="Default common ports, or 22,80,443,8000-8080"
+              placeholder="Leave empty to scan all 1–65535"
             />
           </label>
           <button type="submit" disabled={isScanning}>
-            <span className="button-icon">Scan</span>
-            New scan
+            {isScanning ? "Scanning..." : "Execute Scan"}
           </button>
         </form>
+        {scanMeta && (
+          <div className="scan-meta">{scanMeta}</div>
+        )}
       </section>
 
       <section className="dashboard">
         <div className="current-area">
           <div className="section-heading">
             <div>
-              <p className="eyebrow">Current result</p>
+              <p className="eyebrow">Live terminal</p>
               <h2>{currentScan?.target || "No scan yet"}</h2>
             </div>
             <p>
               {currentScan
-                ? `${currentOpenCount} visible open ports of ${currentScan.scannedPorts} scanned - ${formatTime(currentScan.finishedAt)}`
-                : "Run a scan to show open ports."}
+                ? `${currentOpenCount} visible open ports of ${currentScan.scannedPorts} scanned — ${formatTime(currentScan.finishedAt)}`
+                : "Run a scan to display open ports."}
             </p>
           </div>
 
-          <div className="port-list">
-            {!currentScan && (
-              <div className="empty-state">
-                <strong>Waiting for a target.</strong>
-                <span>The page will display only ports that respond as open.</span>
-              </div>
-            )}
+          <div className="terminal">
+            <div className="terminal-header">
+              <span className="term-dot red" />
+              <span className="term-dot amber" />
+              <span className="term-dot green" />
+              <span>Port Ledger — {currentScan?.target || "Awaiting target"}</span>
+            </div>
+            <div className="terminal-body">
+              {isScanning && (
+                <div className="scanning-state">
+                  <div className="scan-radar" />
+                  <p>PROBING TARGET...</p>
+                </div>
+              )}
 
-            {currentScan?.open?.length === 0 && (
-              <div className="empty-state">
-                <strong>No open ports found.</strong>
-                <span>Try a different target or a custom port list if you expected a service.</span>
-              </div>
-            )}
+              {!isScanning && !currentScan && (
+                <div className="empty-state">
+                  <strong>Waiting for target.</strong>
+                  <span>Enter a hostname or IP and execute a scan to probe all TCP ports.</span>
+                </div>
+              )}
 
-            {currentScan?.open?.map((item) => (
-              <PortRow
-                key={`${currentScan.id}-${item.port || item.redactedId}`}
-                scanId={currentScan.id}
-                item={item}
-                onProtect={protectPort}
-                onUnlock={() => setUnlockOpen(true)}
-              />
-            ))}
+              {!isScanning && currentScan?.open?.length === 0 && (
+                <div className="empty-state">
+                  <strong>No open ports detected.</strong>
+                  <span>The target responded closed on every probed port.</span>
+                </div>
+              )}
+
+              <div className="port-list">
+                {!isScanning && currentScan?.open?.map((item, index) => (
+                  <PortRow
+                    key={`${currentScan.id}-${item.port || item.redactedId}`}
+                    scanId={currentScan.id}
+                    item={item}
+                    onProtect={protectPort}
+                    onUnlock={() => setUnlockOpen(true)}
+                    index={index}
+                  />
+                ))}
+              </div>
+            </div>
           </div>
         </div>
 
         <aside className="history-area">
           <div className="section-heading compact">
             <div>
-              <p className="eyebrow">History</p>
-              <h2>Changes</h2>
+              <p className="eyebrow">Mission log</p>
+              <h2>Scan history</h2>
             </div>
           </div>
           <div className="history-list">
             {!history.length && (
               <div className="empty-state">
-                <strong>No history yet.</strong>
-                <span>Each scan records ports added and removed against the previous scan for that target.</span>
+                <strong>No history recorded.</strong>
+                <span>Each scan is archived with port diffs against previous results for the same target.</span>
               </div>
             )}
             {history.map((entry) => (
-              <article className="history-item" key={entry.id} onClick={() => setCurrentScan(entry)}>
+              <article
+                className={`history-item ${entry.id === currentScan?.id ? "active" : ""}`}
+                key={entry.id}
+                onClick={() => setCurrentScan(entry)}
+              >
                 <header>
                   <strong>{entry.target}</strong>
                   <time>{formatTime(entry.finishedAt)}</time>
@@ -256,15 +300,15 @@ export default function Page() {
       </section>
 
       {unlockOpen && (
-        <div className="modal-backdrop" role="presentation">
-          <form className="unlock-form" onSubmit={unlock}>
-            <h3>Unlock protected rows</h3>
-            <p>The server will only return protected port details after the password is verified.</p>
+        <div className="modal-backdrop" role="presentation" onClick={() => setUnlockOpen(false)}>
+          <form className="unlock-form" onSubmit={unlock} onClick={(e) => e.stopPropagation()}>
+            <h3>Security clearance required</h3>
+            <p>Protected port details are redacted server-side. Verify your credentials to decrypt and view classified rows.</p>
             <input
               value={password}
               onChange={(event) => setPassword(event.target.value)}
               type="password"
-              placeholder="Password"
+              placeholder="Enter password"
               autoComplete="current-password"
               autoFocus
             />
@@ -272,7 +316,7 @@ export default function Page() {
               <button type="button" onClick={() => setUnlockOpen(false)}>
                 Cancel
               </button>
-              <button type="submit">Unlock</button>
+              <button type="submit">Authenticate</button>
             </menu>
           </form>
         </div>
