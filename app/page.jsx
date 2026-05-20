@@ -31,47 +31,21 @@ function StatusPill({ status }) {
   );
 }
 
-function PortRow({ scanId, item, onProtect, onUnlock, index }) {
-  const isProtected = item.protected;
-
+function PortRow({ item }) {
   return (
-    <article
-      className={`port-row ${isProtected ? "locked" : "open"}`}
-      style={{ animationDelay: `${index * 40}ms` }}
-    >
-      <div className="port-number">{isProtected ? "···" : item.port}</div>
+    <article className="port-row">
+      <div className="port-number">{item.port}</div>
       <div className="port-main">
-        <strong>{isProtected ? "Protected port" : item.service}</strong>
+        <strong>{item.service}</strong>
         <div className="port-meta">
-          {!isProtected && (
-            <>
-              <span>{item.latencyMs} ms</span>
-              {item.title && (
-                <span className="port-title" title={item.title}>
-                  {item.title}
-                </span>
-              )}
-            </>
-          )}
-          {isProtected && (
-            <span>Server redacted — verify password to display</span>
+          <span>{item.latencyMs} ms</span>
+          {item.title && (
+            <span className="port-title" title={item.title}>
+              {item.title}
+            </span>
           )}
         </div>
       </div>
-      <button
-        className={`row-switch ${isProtected ? "off" : "on"}`}
-        type="button"
-        aria-pressed={!isProtected}
-        title={isProtected ? "Enter password to display this port" : "Protect this row on the server"}
-        onClick={() => {
-          if (isProtected) onUnlock();
-          else onProtect(scanId, item.port);
-        }}
-      >
-        <span className="track">
-          <span className="thumb" />
-        </span>
-      </button>
     </article>
   );
 }
@@ -85,24 +59,84 @@ function tagList(items, type, prefix) {
   ));
 }
 
+function LoginScreen({ onLogin }) {
+  const [password, setPassword] = useState("");
+  const [error, setError] = useState("");
+  const [loading, setLoading] = useState(false);
+
+  async function handleSubmit(event) {
+    event.preventDefault();
+    setLoading(true);
+    setError("");
+    try {
+      await requestJson("/api/unlock", {
+        method: "POST",
+        body: JSON.stringify({ password })
+      });
+      onLogin();
+    } catch {
+      setError("Incorrect password");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  return (
+    <div className="login-screen">
+      <div className="login-box">
+        <h1>Port Ledger</h1>
+        <p className="subtitle">Enter password to access scan results and history.</p>
+        <form onSubmit={handleSubmit}>
+          <label>
+            <span>Password</span>
+            <input
+              type="password"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              placeholder="Enter password"
+              autoFocus
+              required
+            />
+          </label>
+          {error && <p className="error">{error}</p>}
+          <button type="submit" disabled={loading}>
+            {loading ? "Authenticating..." : "Access System"}
+          </button>
+        </form>
+      </div>
+    </div>
+  );
+}
+
 export default function Page() {
+  const [authenticated, setAuthenticated] = useState(null);
   const [target, setTarget] = useState("");
   const [ports, setPorts] = useState("");
   const [currentScan, setCurrentScan] = useState(null);
   const [history, setHistory] = useState([]);
   const [status, setStatus] = useState({ text: "Ready", mode: "ready" });
   const [isScanning, setIsScanning] = useState(false);
-  const [unlockOpen, setUnlockOpen] = useState(false);
-  const [password, setPassword] = useState("");
   const [scanMeta, setScanMeta] = useState("");
 
   const currentOpenCount = useMemo(() => {
-    return currentScan?.open?.filter((item) => !item.protected).length || 0;
+    return currentScan?.open?.length || 0;
   }, [currentScan]);
 
   const isFullScan = useMemo(() => {
     return !ports.trim();
   }, [ports]);
+
+  async function checkAuth() {
+    try {
+      const payload = await requestJson("/api/auth");
+      setAuthenticated(payload.authenticated);
+      if (payload.authenticated) {
+        await loadHistory();
+      }
+    } catch {
+      setAuthenticated(false);
+    }
+  }
 
   async function loadHistory() {
     const payload = await requestJson("/api/history");
@@ -111,14 +145,14 @@ export default function Page() {
   }
 
   useEffect(() => {
-    loadHistory().catch((error) => setStatus({ text: error.message, mode: "error" }));
+    checkAuth();
   }, []);
 
   async function submitScan(event) {
     event.preventDefault();
     setIsScanning(true);
     setStatus({ text: "Scanning", mode: "busy" });
-    setScanMeta(isFullScan ? "Scanning all 65,535 TCP ports — this may take 4–8 minutes" : "Scanning selected ports");
+    setScanMeta(isFullScan ? "Scanning all 65,535 TCP ports" : "Scanning selected ports");
 
     try {
       const payload = await requestJson("/api/scan", {
@@ -136,46 +170,41 @@ export default function Page() {
     }
   }
 
-  async function protectPort(scanId, port) {
+  async function logout() {
     try {
-      const payload = await requestJson("/api/protect-port", {
-        method: "POST",
-        body: JSON.stringify({ scanId, port })
-      });
-      setCurrentScan(payload.scan);
-      await loadHistory();
-      setStatus({ text: "Protected", mode: "ready" });
-    } catch (error) {
-      setStatus({ text: error.message, mode: "error" });
+      await requestJson("/api/logout", { method: "POST" });
+    } catch {
+      // ignore
     }
+    setAuthenticated(false);
+    setHistory([]);
+    setCurrentScan(null);
   }
 
-  async function unlock(event) {
-    event.preventDefault();
-    try {
-      await requestJson("/api/unlock", {
-        method: "POST",
-        body: JSON.stringify({ password })
-      });
-      setPassword("");
-      setUnlockOpen(false);
-      const payload = await requestJson("/api/history");
-      setHistory(payload.history);
-      setCurrentScan(payload.history.find((entry) => entry.id === currentScan?.id) || payload.history[0] || null);
-      setStatus({ text: "Unlocked", mode: "ready" });
-    } catch (error) {
-      setStatus({ text: "Wrong password", mode: "error" });
-    }
+  if (authenticated === null) {
+    return (
+      <div className="login-screen">
+        <div className="login-box">
+          <p className="subtitle">Loading...</p>
+        </div>
+      </div>
+    );
+  }
+
+  if (!authenticated) {
+    return <LoginScreen onLogin={() => { setAuthenticated(true); loadHistory(); }} />;
   }
 
   return (
     <main className="shell">
       <section className="hero">
-        <div className="hero-title-group">
-          <p className="eyebrow">Network Exposure Monitor</p>
-          <h1>PORT LEDGER</h1>
+        <h1>Port Ledger</h1>
+        <div className="hero-actions">
+          <StatusPill status={status} />
+          <button className="btn-logout" onClick={logout} type="button">
+            Log out
+          </button>
         </div>
-        <StatusPill status={status} />
       </section>
 
       <section className="scan-panel" aria-label="Scan controls">
@@ -199,24 +228,19 @@ export default function Page() {
             />
           </label>
           <button type="submit" disabled={isScanning}>
-            {isScanning ? "Scanning..." : "Execute Scan"}
+            {isScanning ? "Scanning..." : "Scan"}
           </button>
         </form>
-        {scanMeta && (
-          <div className="scan-meta">{scanMeta}</div>
-        )}
+        {scanMeta && <div className="scan-meta">{scanMeta}</div>}
       </section>
 
       <section className="dashboard">
         <div className="current-area">
           <div className="section-heading">
-            <div>
-              <p className="eyebrow">Live terminal</p>
-              <h2>{currentScan?.target || "No scan yet"}</h2>
-            </div>
+            <h2>{currentScan?.target || "No scan yet"}</h2>
             <p>
               {currentScan
-                ? `${currentOpenCount} visible open ports of ${currentScan.scannedPorts} scanned — ${formatTime(currentScan.finishedAt)}`
+                ? `${currentOpenCount} open ports of ${currentScan.scannedPorts} scanned — ${formatTime(currentScan.finishedAt)}`
                 : "Run a scan to display open ports."}
             </p>
           </div>
@@ -226,20 +250,19 @@ export default function Page() {
               <span className="term-dot red" />
               <span className="term-dot amber" />
               <span className="term-dot green" />
-              <span>Port Ledger — {currentScan?.target || "Awaiting target"}</span>
+              <span>Results — {currentScan?.target || "Awaiting target"}</span>
             </div>
             <div className="terminal-body">
               {isScanning && (
                 <div className="scanning-state">
-                  <div className="scan-radar" />
-                  <p>PROBING TARGET...</p>
+                  <p>Scanning in progress...</p>
                 </div>
               )}
 
               {!isScanning && !currentScan && (
                 <div className="empty-state">
                   <strong>Waiting for target.</strong>
-                  <span>Enter a hostname or IP and execute a scan to probe all TCP ports.</span>
+                  <span>Enter a hostname or IP and run a scan.</span>
                 </div>
               )}
 
@@ -251,16 +274,10 @@ export default function Page() {
               )}
 
               <div className="port-list">
-                {!isScanning && currentScan?.open?.map((item, index) => (
-                  <PortRow
-                    key={`${currentScan.id}-${item.port || item.redactedId}`}
-                    scanId={currentScan.id}
-                    item={item}
-                    onProtect={protectPort}
-                    onUnlock={() => setUnlockOpen(true)}
-                    index={index}
-                  />
-                ))}
+                {!isScanning &&
+                  currentScan?.open?.map((item) => (
+                    <PortRow key={`${currentScan.id}-${item.port}`} item={item} />
+                  ))}
               </div>
             </div>
           </div>
@@ -268,16 +285,13 @@ export default function Page() {
 
         <aside className="history-area">
           <div className="section-heading compact">
-            <div>
-              <p className="eyebrow">Mission log</p>
-              <h2>Scan history</h2>
-            </div>
+            <h2>History</h2>
           </div>
           <div className="history-list">
             {!history.length && (
               <div className="empty-state">
-                <strong>No history recorded.</strong>
-                <span>Each scan is archived with port diffs against previous results for the same target.</span>
+                <strong>No history yet.</strong>
+                <span>Each scan is saved with port diffs.</span>
               </div>
             )}
             {history.map((entry) => (
@@ -298,29 +312,6 @@ export default function Page() {
           </div>
         </aside>
       </section>
-
-      {unlockOpen && (
-        <div className="modal-backdrop" role="presentation" onClick={() => setUnlockOpen(false)}>
-          <form className="unlock-form" onSubmit={unlock} onClick={(e) => e.stopPropagation()}>
-            <h3>Security clearance required</h3>
-            <p>Protected port details are redacted server-side. Verify your credentials to decrypt and view classified rows.</p>
-            <input
-              value={password}
-              onChange={(event) => setPassword(event.target.value)}
-              type="password"
-              placeholder="Enter password"
-              autoComplete="current-password"
-              autoFocus
-            />
-            <menu>
-              <button type="button" onClick={() => setUnlockOpen(false)}>
-                Cancel
-              </button>
-              <button type="submit">Authenticate</button>
-            </menu>
-          </form>
-        </div>
-      )}
     </main>
   );
 }
