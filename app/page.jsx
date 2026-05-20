@@ -1,14 +1,13 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 
 function formatTime(value) {
   return new Intl.DateTimeFormat(undefined, {
     month: "short",
     day: "numeric",
     hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit"
+    minute: "2-digit"
   }).format(new Date(value));
 }
 
@@ -20,43 +19,6 @@ async function requestJson(url, options = {}) {
   const payload = await response.json();
   if (!response.ok) throw new Error(payload.error || "Request failed");
   return payload;
-}
-
-function StatusPill({ status }) {
-  return (
-    <div className={`status-pill ${status.mode}`}>
-      <span className="dot" />
-      <strong>{status.text}</strong>
-    </div>
-  );
-}
-
-function PortRow({ item }) {
-  return (
-    <article className="port-row">
-      <div className="port-number">{item.port}</div>
-      <div className="port-main">
-        <strong>{item.service}</strong>
-        <div className="port-meta">
-          <span>{item.latencyMs} ms</span>
-          {item.title && (
-            <span className="port-title" title={item.title}>
-              {item.title}
-            </span>
-          )}
-        </div>
-      </div>
-    </article>
-  );
-}
-
-function tagList(items, type, prefix) {
-  if (!items.length) return <span className="tag open">{prefix} none</span>;
-  return items.map((port) => (
-    <span className={`tag ${type}`} key={`${type}-${port}`}>
-      {prefix} {port}
-    </span>
-  ));
 }
 
 function LoginScreen({ onLogin }) {
@@ -75,32 +37,29 @@ function LoginScreen({ onLogin }) {
       });
       onLogin();
     } catch {
-      setError("Incorrect password");
+      setError("Wrong password");
     } finally {
       setLoading(false);
     }
   }
 
   return (
-    <div className="login-screen">
-      <div className="login-box">
+    <div className="login-wrap">
+      <div className="login-card">
         <h1>Port Ledger</h1>
-        <p className="subtitle">Enter password to access scan results and history.</p>
+        <p>Password required</p>
         <form onSubmit={handleSubmit}>
-          <label>
-            <span>Password</span>
-            <input
-              type="password"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              placeholder="Enter password"
-              autoFocus
-              required
-            />
-          </label>
-          {error && <p className="error">{error}</p>}
+          <input
+            type="password"
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+            placeholder="Password"
+            autoFocus
+            required
+          />
+          {error && <span className="login-error">{error}</span>}
           <button type="submit" disabled={loading}>
-            {loading ? "Authenticating..." : "Access System"}
+            {loading ? "..." : "Enter"}
           </button>
         </form>
       </div>
@@ -110,72 +69,48 @@ function LoginScreen({ onLogin }) {
 
 export default function Page() {
   const [authenticated, setAuthenticated] = useState(null);
-  const [target, setTarget] = useState("");
-  const [ports, setPorts] = useState("");
   const [currentScan, setCurrentScan] = useState(null);
   const [history, setHistory] = useState([]);
-  const [status, setStatus] = useState({ text: "Ready", mode: "ready" });
-  const [isScanning, setIsScanning] = useState(false);
-  const [scanMeta, setScanMeta] = useState("");
-
-  const currentOpenCount = useMemo(() => {
-    return currentScan?.open?.length || 0;
-  }, [currentScan]);
-
-  const isFullScan = useMemo(() => {
-    return !ports.trim();
-  }, [ports]);
+  const [scanning, setScanning] = useState(false);
+  const [error, setError] = useState("");
 
   async function checkAuth() {
     try {
       const payload = await requestJson("/api/auth");
       setAuthenticated(payload.authenticated);
-      if (payload.authenticated) {
-        await loadHistory();
-      }
+      if (payload.authenticated) await loadData();
     } catch {
       setAuthenticated(false);
     }
   }
 
-  async function loadHistory() {
+  async function loadData() {
     const payload = await requestJson("/api/history");
     setHistory(payload.history);
-    setCurrentScan((existing) => existing || payload.history[0] || null);
+    setCurrentScan(payload.history[0] || null);
   }
 
   useEffect(() => {
     checkAuth();
   }, []);
 
-  async function submitScan(event) {
-    event.preventDefault();
-    setIsScanning(true);
-    setStatus({ text: "Scanning", mode: "busy" });
-    setScanMeta(isFullScan ? "Scanning all 65,535 TCP ports" : "Scanning selected ports");
-
+  async function refresh() {
+    setScanning(true);
+    setError("");
     try {
-      const payload = await requestJson("/api/scan", {
-        method: "POST",
-        body: JSON.stringify({ target, ports })
-      });
-      setCurrentScan(payload.scan);
-      await loadHistory();
-      setStatus({ text: "Ready", mode: "ready" });
-    } catch (error) {
-      setStatus({ text: error.message, mode: "error" });
+      await requestJson("/api/scan", { method: "POST" });
+      await loadData();
+    } catch (err) {
+      setError(err.message);
     } finally {
-      setIsScanning(false);
-      setScanMeta("");
+      setScanning(false);
     }
   }
 
   async function logout() {
     try {
       await requestJson("/api/logout", { method: "POST" });
-    } catch {
-      // ignore
-    }
+    } catch {}
     setAuthenticated(false);
     setHistory([]);
     setCurrentScan(null);
@@ -183,135 +118,128 @@ export default function Page() {
 
   if (authenticated === null) {
     return (
-      <div className="login-screen">
-        <div className="login-box">
-          <p className="subtitle">Loading...</p>
+      <div className="login-wrap">
+        <div className="login-card">
+          <p>Loading...</p>
         </div>
       </div>
     );
   }
 
   if (!authenticated) {
-    return <LoginScreen onLogin={() => { setAuthenticated(true); loadHistory(); }} />;
+    return <LoginScreen onLogin={() => { setAuthenticated(true); loadData(); }} />;
   }
 
   return (
-    <main className="shell">
-      <section className="hero">
-        <h1>Port Ledger</h1>
-        <div className="hero-actions">
-          <StatusPill status={status} />
+    <div className="app">
+      <header className="topbar">
+        <div className="topbar-left">
+          <span className="logo">Port Ledger</span>
+          <span className="divider">/</span>
+          <span className="target">{currentScan?.target || "—"}</span>
+        </div>
+        <div className="topbar-right">
+          <button className="btn-refresh" onClick={refresh} disabled={scanning} type="button">
+            {scanning ? "Scanning..." : "Refresh"}
+          </button>
           <button className="btn-logout" onClick={logout} type="button">
             Log out
           </button>
         </div>
-      </section>
+      </header>
 
-      <section className="scan-panel" aria-label="Scan controls">
-        <form className="scan-form" onSubmit={submitScan}>
-          <label>
-            <span>Target host</span>
-            <input
-              value={target}
-              onChange={(event) => setTarget(event.target.value)}
-              placeholder="192.168.1.1"
-              required
-              autoComplete="off"
-            />
-          </label>
-          <label>
-            <span>Port range</span>
-            <input
-              value={ports}
-              onChange={(event) => setPorts(event.target.value)}
-              placeholder="Leave empty to scan all 1–65535"
-            />
-          </label>
-          <button type="submit" disabled={isScanning}>
-            {isScanning ? "Scanning..." : "Scan"}
-          </button>
-        </form>
-        {scanMeta && <div className="scan-meta">{scanMeta}</div>}
-      </section>
+      {error && <div className="banner-error">{error}</div>}
 
-      <section className="dashboard">
-        <div className="current-area">
-          <div className="section-heading">
-            <h2>{currentScan?.target || "No scan yet"}</h2>
-            <p>
+      <main className="main">
+        <section className="results">
+          <div className="results-header">
+            <h2>
               {currentScan
-                ? `${currentOpenCount} open ports of ${currentScan.scannedPorts} scanned — ${formatTime(currentScan.finishedAt)}`
-                : "Run a scan to display open ports."}
-            </p>
-          </div>
-
-          <div className="terminal">
-            <div className="terminal-header">
-              <span className="term-dot red" />
-              <span className="term-dot amber" />
-              <span className="term-dot green" />
-              <span>Results — {currentScan?.target || "Awaiting target"}</span>
-            </div>
-            <div className="terminal-body">
-              {isScanning && (
-                <div className="scanning-state">
-                  <p>Scanning in progress...</p>
-                </div>
-              )}
-
-              {!isScanning && !currentScan && (
-                <div className="empty-state">
-                  <strong>Waiting for target.</strong>
-                  <span>Enter a hostname or IP and run a scan.</span>
-                </div>
-              )}
-
-              {!isScanning && currentScan?.open?.length === 0 && (
-                <div className="empty-state">
-                  <strong>No open ports detected.</strong>
-                  <span>The target responded closed on every probed port.</span>
-                </div>
-              )}
-
-              <div className="port-list">
-                {!isScanning &&
-                  currentScan?.open?.map((item) => (
-                    <PortRow key={`${currentScan.id}-${item.port}`} item={item} />
-                  ))}
-              </div>
-            </div>
-          </div>
-        </div>
-
-        <aside className="history-area">
-          <div className="section-heading compact">
-            <h2>History</h2>
-          </div>
-          <div className="history-list">
-            {!history.length && (
-              <div className="empty-state">
-                <strong>No history yet.</strong>
-                <span>Each scan is saved with port diffs.</span>
-              </div>
+                ? `${currentScan.open.length} open ports`
+                : "No scan data"}
+            </h2>
+            {currentScan && (
+              <span className="meta">
+                {currentScan.scannedPorts.toLocaleString()} scanned — {formatTime(currentScan.finishedAt)}
+              </span>
             )}
+          </div>
+
+          {!currentScan && (
+            <div className="empty">
+              <p>Press Refresh to scan.</p>
+            </div>
+          )}
+
+          {currentScan && currentScan.open.length === 0 && (
+            <div className="empty">
+              <p>No open ports found.</p>
+            </div>
+          )}
+
+          {currentScan && currentScan.open.length > 0 && (
+            <div className="table-wrap">
+              <table className="port-table">
+                <thead>
+                  <tr>
+                    <th>Port</th>
+                    <th>Service</th>
+                    <th>Latency</th>
+                    <th>Title</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {currentScan.open.map((item) => (
+                    <tr key={item.port}>
+                      <td className="col-port">{item.port}</td>
+                      <td className="col-service">{item.service}</td>
+                      <td className="col-latency">{item.latencyMs} ms</td>
+                      <td className="col-title">{item.title || "—"}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </section>
+
+        <aside className="sidebar">
+          <h3>History</h3>
+          <div className="history-list">
+            {!history.length && <p className="empty-text">No scans yet.</p>}
             {history.map((entry) => (
-              <article
+              <div
                 className={`history-item ${entry.id === currentScan?.id ? "active" : ""}`}
                 key={entry.id}
                 onClick={() => setCurrentScan(entry)}
               >
-                <header>
-                  <strong>{entry.target}</strong>
-                  <time>{formatTime(entry.finishedAt)}</time>
-                </header>
-                <div className="change-row">{tagList(entry.diff.added, "added", "+")}</div>
-                <div className="change-row">{tagList(entry.diff.removed, "removed", "-")}</div>
-                <div className="change-row">{tagList(entry.openPorts, "open", "open")}</div>
-              </article>
+                <div className="history-top">
+                  <span className="history-target">{entry.target}</span>
+                  <span className="history-time">{formatTime(entry.finishedAt)}</span>
+                </div>
+                <div className="history-ports">
+                  {entry.openPorts.slice(0, 8).map((p) => (
+                    <span className="history-chip" key={p}>{p}</span>
+                  ))}
+                  {entry.openPorts.length > 8 && (
+                    <span className="history-chip more">+{entry.openPorts.length - 8}</span>
+                  )}
+                </div>
+                {(entry.diff.added.length > 0 || entry.diff.removed.length > 0) && (
+                  <div className="history-diff">
+                    {entry.diff.added.length > 0 && (
+                      <span className="diff-added">+{entry.diff.added.length}</span>
+                    )}
+                    {entry.diff.removed.length > 0 && (
+                      <span className="diff-removed">-{entry.diff.removed.length}</span>
+                    )}
+                  </div>
+                )}
+              </div>
             ))}
           </div>
         </aside>
-      </section>
-    </main>
+      </main>
+    </div>
   );
 }

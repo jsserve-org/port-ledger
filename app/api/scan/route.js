@@ -1,17 +1,16 @@
 import { cookies } from "next/headers";
 import { NextResponse } from "next/server";
 import { isAuthenticated } from "@/lib/auth";
-import { buildDiff, normalizeTarget, parsePorts, scanPorts } from "@/lib/scanner";
+import { buildDiff, DEFAULT_SCAN_TARGET, normalizeTarget, parsePorts, scanPorts } from "@/lib/scanner";
 import { readHistory, redactEntry, writeHistory } from "@/lib/store";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-export async function POST(request) {
+export async function POST() {
   try {
-    const body = await request.json();
-    const target = normalizeTarget(body.target);
-    const ports = parsePorts(body.ports);
+    const target = normalizeTarget(DEFAULT_SCAN_TARGET);
+    const ports = parsePorts("");
     const startedAt = new Date().toISOString();
     const results = await scanPorts(target, ports);
     const open = results.filter((result) => result.open);
