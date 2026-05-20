@@ -11,6 +11,7 @@ services:
       PORT: "3000"
       SCAN_PASSWORD: "${SCAN_PASSWORD:-admin123}"
       AUTH_SECRET: "${AUTH_SECRET:-change-this-secret-before-public-use}"
+      DEFAULT_SCAN_TARGET: "${DEFAULT_SCAN_TARGET:-}"
     volumes:
       - port-ledger-data:/app/data
 
